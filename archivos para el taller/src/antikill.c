@@ -5,13 +5,13 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <errno.h>
-#include <sys/user.h>
+#include <syscall.h>
 
 int main(int argc, char* argv[]) {
 	int status;
 	pid_t child;
-	struct user_regs_struct uregs;
+
+	long reg_values[3] = {0};
 
 	if (argc <= 1) {
 		fprintf(stderr, "Uso: %s comando [argumentos ...]\n", argv[0]);
@@ -22,10 +22,9 @@ int main(int argc, char* argv[]) {
 	child = fork();
 	if (child == -1) { perror("ERROR fork"); return 1; }
 	if (child == 0) {
-		if (ptrace(PTRACE_TRACEME, 0 , NULL , NULL)){
-			perror("ERROR child ptrace(PTRACE_TRACEME,...)");
-			exit(1);
-		}
+	    if (ptrace(PTRACE_TRACEME, 0 , NULL , NULL)) {
+            perror("ERROR child ptrace(PTRACE_TRACEME,...)"); exit(1);
+        }
 		/* S'olo se ejecuta en el Hijo */
 		execvp(argv[1], argv+1);
 		/* Si vuelve de exec() hubo un error */
@@ -33,22 +32,22 @@ int main(int argc, char* argv[]) {
 	} else {
 		/* S'olo se ejecuta en el Padre */
 		while(1) {
-			if (wait(&status) < 0) {perror("waitpid"); break; }
-			if (WIFEXITED(status)) break; /* Proceso terminado */ 
-			int sysno = ptrace(PTRACE_PEEKUSER, child, 8 * ORIG_RAX, NULL);
+			if (wait(&status) < 0) {perror("waitpid"); break;}
+			if (WIFEXITED(status)) break; /* Proceso terminado */
+			
+			reg_values[0] = ptrace(PTRACE_PEEKUSER, child, 8 * ORIG_RAX, NULL);
+			reg_values[1] = ptrace(PTRACE_PEEKUSER, child, 8 * RDI, NULL);
+			reg_values[2] = ptrace(PTRACE_PEEKUSER, child, 8 * RSI, NULL);
 
-			if(sysno == 62){
-				int a = ptrace(PTRACE_GETREGS, child, NULL, &uregs);
-				printf("%lli\n", uregs.rax);
-				//int b = ptrace(PTRACE_PEEKUSER, child, 8 * ORIG_RCX, NULL);
+					
+			if (reg_values[0] == SYS_kill && reg_values[2] == SIGKILL) {
+				printf("El proceso %d intentó matar al proceso %d.\n", child, reg_values[1]);
+				kill(child, SIGKILL);
+				break;
 			}
-			
-			
 			ptrace(PTRACE_SYSCALL, child, NULL, NULL);
-
 		}
-
-		
+        ptrace(PTRACE_DETACH, child, NULL, NULL);
 	}
 	return 0;
 }
